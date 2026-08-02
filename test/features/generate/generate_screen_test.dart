@@ -7,6 +7,7 @@ import 'package:gopher_jobs/domain/app_settings.dart';
 import 'package:gopher_jobs/domain/generation_artifacts.dart';
 import 'package:gopher_jobs/domain/generation_service.dart';
 import 'package:gopher_jobs/domain/providers.dart';
+import 'package:gopher_jobs/features/generate/generate_error_banner.dart';
 import 'package:gopher_jobs/features/generate/generate_screen.dart';
 
 const _settingsWithToken = AppSettings(
@@ -196,6 +197,105 @@ void main() {
       expect(find.text('Generation complete.'), findsOneWidget);
     });
 
+    testWidgets('JobFetchException shows fallback field and error details',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final service = _FakeGenerationService(
+        error: JobFetchException(
+          'Could not fetch the job posting (network or CORS).',
+          cause: Exception('ClientException: CORS blocked'),
+        ),
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            appSettingsProvider.overrideWith((ref) async => _settingsWithToken),
+            generationServiceProvider.overrideWithValue(service),
+          ],
+          child: const MaterialApp(home: GenerateScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('jobUrlField')),
+        'https://example.com/jobs/42',
+      );
+      await tester.enterText(
+        find.byKey(const Key('sourceMaterialField')),
+        'Source material body',
+      );
+      await tester.pump();
+
+      await tester.tap(find.byKey(const Key('generateButton')));
+      await tester.pumpAndSettle();
+
+      expect(service.lastJobUrl, isNotNull);
+      expect(find.byKey(const Key('jobDescriptionFallbackField')), findsOneWidget);
+      expect(find.byType(GenerateErrorBanner), findsOneWidget);
+      expect(
+        find.textContaining('Could not fetch the job posting'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('generate with pasted job description passes override',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final service = _FakeGenerationService(
+        artifacts: const GenerationArtifacts(
+          resumeMarkdown: '# Resume',
+          coverLetterMarkdown: '# Cover',
+        ),
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            appSettingsProvider.overrideWith((ref) async => _settingsWithToken),
+            generationServiceProvider.overrideWithValue(service),
+          ],
+          child: const MaterialApp(home: GenerateScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('jobUrlField')),
+        'https://example.com/jobs/42',
+      );
+      await tester.enterText(
+        find.byKey(const Key('sourceMaterialField')),
+        'Source material body',
+      );
+      await tester.pump();
+
+      // Trigger fetch failure to reveal fallback field.
+      service.error = JobFetchException('fetch failed');
+      await tester.tap(find.byKey(const Key('generateButton')));
+      await tester.pumpAndSettle();
+
+      service.error = null;
+      await tester.enterText(
+        find.byKey(const Key('jobDescriptionFallbackField')),
+        'Pasted job requirements',
+      );
+      await tester.pump();
+
+      final generateFinder =
+          find.byKey(const Key('generateButton'), skipOffstage: false);
+      await tester.ensureVisible(generateFinder);
+      await tester.tap(generateFinder);
+      await tester.pumpAndSettle();
+
+      expect(service.lastJobDescriptionOverride, 'Pasted job requirements');
+      expect(find.text('Generation complete.'), findsOneWidget);
+    });
+
     testWidgets('failed generate shows inline error', (tester) async {
       await tester.pumpWidget(
         ProviderScope(
@@ -247,18 +347,21 @@ class _FakeGenerationService implements GenerationService {
   _FakeGenerationService({this.artifacts, this.error});
 
   final GenerationArtifacts? artifacts;
-  final Object? error;
+  Object? error;
 
   Uri? lastJobUrl;
   String? lastSourceMaterial;
+  String? lastJobDescriptionOverride;
 
   @override
   Future<GenerationArtifacts> generate({
     required Uri jobUrl,
     required String sourceMaterial,
+    String? jobDescriptionOverride,
   }) async {
     lastJobUrl = jobUrl;
     lastSourceMaterial = sourceMaterial;
+    lastJobDescriptionOverride = jobDescriptionOverride;
     if (error != null) throw error!;
     return artifacts ??
         const GenerationArtifacts(

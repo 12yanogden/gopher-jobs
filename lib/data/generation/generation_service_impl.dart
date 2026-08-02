@@ -5,6 +5,7 @@ import '../../domain/generation_artifacts.dart';
 import '../../domain/generation_request.dart';
 import '../../domain/generation_service.dart';
 import '../../domain/job_fetch_service.dart';
+import '../../domain/job_posting.dart';
 import '../../domain/settings_repository.dart';
 import '../ai/ai.dart' as ai;
 import '../job_fetch/job_fetch_exceptions.dart';
@@ -33,6 +34,7 @@ class GenerationServiceImpl implements GenerationService {
   Future<GenerationArtifacts> generate({
     required Uri jobUrl,
     required String sourceMaterial,
+    String? jobDescriptionOverride,
   }) async {
     try {
       final settings = await settingsRepository.get();
@@ -43,10 +45,20 @@ class GenerationServiceImpl implements GenerationService {
         );
       }
 
-      final job = await jobFetchService.fetch(
-        jobUrl,
-        proxyUrl: settings.fetchProxyUrl,
-      );
+      final override = jobDescriptionOverride?.trim();
+      final JobPosting job;
+      if (override != null && override.isNotEmpty) {
+        job = JobPosting(
+          url: jobUrl,
+          plainText: override,
+          fetchedAt: DateTime.now(),
+        );
+      } else {
+        job = await jobFetchService.fetch(
+          jobUrl,
+          proxyUrl: settings.fetchProxyUrl,
+        );
+      }
 
       final client = _aiClientFactory(settings);
       return await client.generateArtifacts(

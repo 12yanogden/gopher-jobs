@@ -131,6 +131,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen>
       final artifacts = await ref.read(generationServiceProvider).generate(
             jobUrl: input.jobUrl,
             sourceMaterial: input.sourceMaterial,
+            jobDescriptionOverride: input.jobDescriptionOverride,
           );
       if (!mounted) return;
       ref.read(generationArtifactsProvider.notifier).state = artifacts;

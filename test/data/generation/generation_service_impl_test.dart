@@ -143,6 +143,36 @@ void main() {
       expect(artifacts.coverLetterMarkdown, '# Cover');
     });
 
+    test('skips fetch when jobDescriptionOverride is provided', () async {
+      final fetch = _FakeJobFetchService();
+      final aiClient = _FakeAiClient(
+        artifacts: const GenerationArtifacts(
+          resumeMarkdown: '# Resume',
+          coverLetterMarkdown: '# Cover',
+        ),
+      );
+
+      final service = GenerationServiceImpl(
+        settingsRepository: _FakeSettingsRepository(
+          const AppSettings(
+            provider: AiProviderKind.openai,
+            apiToken: 'sk-test',
+          ),
+        ),
+        jobFetchService: fetch,
+        aiClientFactory: (_) => aiClient,
+      );
+
+      await service.generate(
+        jobUrl: jobUrl,
+        sourceMaterial: source,
+        jobDescriptionOverride: '  Senior Flutter role requirements…  ',
+      );
+
+      expect(fetch.lastUrl, isNull);
+      expect(aiClient.lastRequest?.job.plainText, 'Senior Flutter role requirements…');
+    });
+
     test('wraps unexpected errors in GenerationException', () async {
       final service = GenerationServiceImpl(
         settingsRepository: _FakeSettingsRepository(

@@ -229,6 +229,7 @@ class _FakeGenerationService implements GenerationService {
   Future<GenerationArtifacts> generate({
     required Uri jobUrl,
     required String sourceMaterial,
+    String? jobDescriptionOverride,
   }) async {
     lastJobUrl = jobUrl;
     lastSourceMaterial = sourceMaterial;

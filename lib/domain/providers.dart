@@ -18,10 +18,12 @@ class LastGenerationInput {
   const LastGenerationInput({
     required this.jobUrl,
     required this.sourceMaterial,
+    this.jobDescriptionOverride,
   });
 
   final Uri jobUrl;
   final String sourceMaterial;
+  final String? jobDescriptionOverride;
 }
 
 /// Shared settings repository used by Settings UI (via local aliases) and
@@ -77,14 +79,19 @@ class _RecordingGenerationService implements GenerationService {
   Future<GenerationArtifacts> generate({
     required Uri jobUrl,
     required String sourceMaterial,
+    String? jobDescriptionOverride,
   }) async {
     final artifacts = await _inner.generate(
       jobUrl: jobUrl,
       sourceMaterial: sourceMaterial,
+      jobDescriptionOverride: jobDescriptionOverride,
     );
+    final override = jobDescriptionOverride?.trim();
     _ref.read(lastGenerationInputProvider.notifier).state = LastGenerationInput(
       jobUrl: jobUrl,
       sourceMaterial: sourceMaterial,
+      jobDescriptionOverride:
+          override == null || override.isEmpty ? null : override,
     );
     return artifacts;
   }

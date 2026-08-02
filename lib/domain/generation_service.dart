@@ -6,5 +6,6 @@ abstract class GenerationService {
   Future<GenerationArtifacts> generate({
     required Uri jobUrl,
     required String sourceMaterial,
+    String? jobDescriptionOverride,
   });
 }

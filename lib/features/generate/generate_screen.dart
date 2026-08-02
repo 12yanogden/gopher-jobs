@@ -5,8 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/errors.dart';
+import '../../core/job_fetch_hints.dart';
 import '../../domain/app_settings.dart';
 import '../../domain/providers.dart';
+import 'generate_error_banner.dart';
+import 'web_fetch_proxy_banner.dart';
 
 /// Generate tab: job URL + source material form that invokes [GenerationService].
 class GenerateScreen extends ConsumerStatefulWidget {
@@ -20,23 +23,28 @@ class _GenerateScreenState extends ConsumerState<GenerateScreen> {
   final _formKey = GlobalKey<FormState>();
   final _jobUrlController = TextEditingController();
   final _sourceController = TextEditingController();
+  final _jobDescriptionController = TextEditingController();
 
   var _isGenerating = false;
-  String? _errorMessage;
+  Object? _lastError;
+  var _showJobDescriptionFallback = false;
 
   @override
   void initState() {
     super.initState();
     _jobUrlController.addListener(_onFieldsChanged);
     _sourceController.addListener(_onFieldsChanged);
+    _jobDescriptionController.addListener(_onFieldsChanged);
   }
 
   @override
   void dispose() {
     _jobUrlController.removeListener(_onFieldsChanged);
     _sourceController.removeListener(_onFieldsChanged);
+    _jobDescriptionController.removeListener(_onFieldsChanged);
     _jobUrlController.dispose();
     _sourceController.dispose();
+    _jobDescriptionController.dispose();
     super.dispose();
   }
 
@@ -45,6 +53,12 @@ class _GenerateScreenState extends ConsumerState<GenerateScreen> {
   bool _hasApiToken(AppSettings? settings) {
     final token = settings?.apiToken?.trim();
     return token != null && token.isNotEmpty;
+  }
+
+  String? _jobDescriptionOverride() {
+    if (!_showJobDescriptionFallback) return null;
+    final text = _jobDescriptionController.text.trim();
+    return text.isEmpty ? null : text;
   }
 
   /// True when fields pass client-side checks and an API token is available.
@@ -69,7 +83,9 @@ class _GenerateScreenState extends ConsumerState<GenerateScreen> {
     if (bytes == null) {
       if (!mounted) return;
       setState(() {
-        _errorMessage = 'Could not read "${file.name}". Try another file.';
+        _lastError = GenerationException(
+          'Could not read "${file.name}". Try another file.',
+        );
       });
       return;
     }
@@ -77,7 +93,7 @@ class _GenerateScreenState extends ConsumerState<GenerateScreen> {
     final text = utf8.decode(bytes);
     setState(() {
       _sourceController.text = text;
-      _errorMessage = null;
+      _lastError = null;
     });
   }
 
@@ -91,19 +107,21 @@ class _GenerateScreenState extends ConsumerState<GenerateScreen> {
 
     setState(() {
       _isGenerating = true;
-      _errorMessage = null;
+      _lastError = null;
     });
 
     try {
       final artifacts = await ref.read(generationServiceProvider).generate(
             jobUrl: jobUrl,
             sourceMaterial: source,
+            jobDescriptionOverride: _jobDescriptionOverride(),
           );
       if (!mounted) return;
       ref.read(generationArtifactsProvider.notifier).state = artifacts;
       ref.read(lastGenerationInputProvider.notifier).state = LastGenerationInput(
         jobUrl: jobUrl,
         sourceMaterial: source,
+        jobDescriptionOverride: _jobDescriptionOverride(),
       );
       ref.read(selectedTabIndexProvider.notifier).state = 1;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -112,18 +130,16 @@ class _GenerateScreenState extends ConsumerState<GenerateScreen> {
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _errorMessage = _messageForError(error);
+        _lastError = error;
+        if (error is JobFetchException) {
+          _showJobDescriptionFallback = true;
+        }
       });
     } finally {
       if (mounted) {
         setState(() => _isGenerating = false);
       }
     }
-  }
-
-  static String _messageForError(Object error) {
-    if (error is AppException) return error.message;
-    return 'Generation failed. Check Settings and try again.';
   }
 
   Widget? _settingsBanner(
@@ -211,7 +227,9 @@ class _GenerateScreenState extends ConsumerState<GenerateScreen> {
     final settingsAsync = ref.watch(appSettingsProvider);
     final settings = settingsAsync.asData?.value;
     final canSubmit = _canSubmit(settings);
-    final banner = _settingsBanner(context, settingsAsync);
+    final settingsBanner = _settingsBanner(context, settingsAsync);
+    final showWebProxyBanner = settings != null &&
+        shouldWarnMissingFetchProxy(fetchProxyUrl: settings.fetchProxyUrl);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Generate')),
@@ -231,9 +249,13 @@ class _GenerateScreenState extends ConsumerState<GenerateScreen> {
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  if (banner != null) ...[
+                  if (settingsBanner != null) ...[
                     const SizedBox(height: 16),
-                    banner,
+                    settingsBanner,
+                  ],
+                  if (showWebProxyBanner) ...[
+                    const SizedBox(height: 16),
+                    const WebFetchProxyBanner(),
                   ],
                   const SizedBox(height: 24),
                   Semantics(
@@ -262,6 +284,30 @@ class _GenerateScreenState extends ConsumerState<GenerateScreen> {
                       },
                     ),
                   ),
+                  if (_showJobDescriptionFallback) ...[
+                    const SizedBox(height: 16),
+                    Semantics(
+                      label: 'Job description pasted as fallback',
+                      textField: true,
+                      child: TextFormField(
+                        key: const Key('jobDescriptionFallbackField'),
+                        controller: _jobDescriptionController,
+                        enabled: !_isGenerating,
+                        minLines: 6,
+                        maxLines: 12,
+                        textAlignVertical: TextAlignVertical.top,
+                        decoration: const InputDecoration(
+                          labelText: 'Job description (paste fallback)',
+                          hintText:
+                              'Paste the job posting text here to skip fetching…',
+                          alignLabelWithHint: true,
+                          border: OutlineInputBorder(),
+                          helperText:
+                              'Optional: paste the job text to skip fetching. Leave empty to retry the URL.',
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   Semantics(
                     label: 'Source material for resume and cover letter',
@@ -298,34 +344,9 @@ class _GenerateScreenState extends ConsumerState<GenerateScreen> {
                       label: const Text('Load .txt / .md file'),
                     ),
                   ),
-                  if (_errorMessage != null) ...[
+                  if (_lastError != null) ...[
                     const SizedBox(height: 12),
-                    Material(
-                      color: theme.colorScheme.errorContainer,
-                      borderRadius: BorderRadius.circular(8),
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Icon(
-                              Icons.error_outline,
-                              color: theme.colorScheme.onErrorContainer,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                _errorMessage!,
-                                key: const Key('generateError'),
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  color: theme.colorScheme.onErrorContainer,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                    GenerateErrorBanner(error: _lastError!),
                   ],
                   const SizedBox(height: 24),
                   Semantics(
